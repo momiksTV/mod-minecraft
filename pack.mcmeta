@@ -1,0 +1,39 @@
+package com.wavesurvival.mod.network.packets;
+
+import com.wavesurvival.mod.gui.ClientWaveData;
+import net.minecraft.network.FriendlyByteBuf;
+import net.minecraftforge.api.distmarker.Dist;
+import net.minecraftforge.fml.DistExecutor;
+import net.minecraftforge.network.NetworkEvent;
+
+import java.util.function.Supplier;
+
+public class SyncWaveDataPacket {
+    private final int wave;
+    private final boolean active;
+    private final int ticks;
+
+    public SyncWaveDataPacket(int wave, boolean active, int ticks) {
+        this.wave = wave;
+        this.active = active;
+        this.ticks = ticks;
+    }
+
+    public static void encode(SyncWaveDataPacket pkt, FriendlyByteBuf buf) {
+        buf.writeInt(pkt.wave);
+        buf.writeBoolean(pkt.active);
+        buf.writeInt(pkt.ticks);
+    }
+
+    public static SyncWaveDataPacket decode(FriendlyByteBuf buf) {
+        return new SyncWaveDataPacket(buf.readInt(), buf.readBoolean(), buf.readInt());
+    }
+
+    public static void handle(SyncWaveDataPacket pkt, Supplier<NetworkEvent.Context> ctx) {
+        ctx.get().enqueueWork(() ->
+                DistExecutor.unsafeRunWhenOn(Dist.CLIENT, () ->
+                        () -> ClientWaveData.update(pkt.wave, pkt.active, pkt.ticks))
+        );
+        ctx.get().setPacketHandled(true);
+    }
+}

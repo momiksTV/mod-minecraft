@@ -1,0 +1,146 @@
+package com.wavesurvival.mod.network.packets;
+
+import com.wavesurvival.mod.network.NetworkHandler;
+import com.wavesurvival.mod.wave.PlayerCoinData;
+import net.minecraft.network.FriendlyByteBuf;
+import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.effect.MobEffects;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.animal.IronGolem;
+import net.minecraft.world.entity.monster.Monster;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.item.enchantment.Enchantments;
+import net.minecraftforge.network.NetworkEvent;
+import net.minecraftforge.network.PacketDistributor;
+
+import java.util.function.Supplier;
+
+public class BuyItemPacket {
+    private final int itemIndex;
+
+    public BuyItemPacket(int itemIndex) { this.itemIndex = itemIndex; }
+
+    public static void encode(BuyItemPacket pkt, FriendlyByteBuf buf) { buf.writeInt(pkt.itemIndex); }
+    public static BuyItemPacket decode(FriendlyByteBuf buf) { return new BuyItemPacket(buf.readInt()); }
+
+    public static void handle(BuyItemPacket pkt, Supplier<NetworkEvent.Context> ctx) {
+        ctx.get().enqueueWork(() -> {
+            ServerPlayer player = ctx.get().getSender();
+            if (player == null) return;
+
+            ShopEntry entry = ShopRegistry.getEntry(pkt.itemIndex);
+            if (entry == null) return;
+
+            PlayerCoinData coinData = PlayerCoinData.get(player);
+            if (!coinData.spendCoins(entry.price)) {
+                player.sendSystemMessage(Component.literal("§cНедостаточно монет! Нужно: " + entry.price));
+                return;
+            }
+
+            // Handle special items
+            if (entry.specialId != null) {
+                handleSpecial(player, entry.specialId);
+            } else {
+                // Give item
+                player.getInventory().add(entry.stack.copy());
+            }
+
+            player.sendSystemMessage(Component.literal("§aКуплено: §e" + entry.name + " §7за §6" + entry.price + " монет"));
+
+            // Sync updated balance
+            NetworkHandler.CHANNEL.send(
+                    PacketDistributor.PLAYER.with(() -> player),
+                    new SyncCoinPacket(coinData.getCoins())
+            );
+        });
+        ctx.get().setPacketHandled(true);
+    }
+
+    private static void handleSpecial(ServerPlayer player, String id) {
+        ServerLevel level = player.getLevel() instanceof ServerLevel sl ? sl : null;
+        if (level == null) return;
+
+        switch (id) {
+            case "strength" -> player.addEffect(new MobEffectInstance(MobEffects.DAMAGE_BOOST, 2400, 1));
+            case "speed" -> player.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SPEED, 2400, 1));
+            case "healing" -> player.addEffect(new MobEffectInstance(MobEffects.HEAL, 1, 1));
+            case "resistance" -> player.addEffect(new MobEffectInstance(MobEffects.DAMAGE_RESISTANCE, 2400, 1));
+            case "golem" -> spawnGolem(player, level, false);
+            case "mega_golem" -> spawnGolem(player, level, true);
+        }
+    }
+
+    private static void spawnGolem(ServerPlayer player, ServerLevel level, boolean mega) {
+        IronGolem golem = new IronGolem(EntityType.IRON_GOLEM, level);
+        golem.setPos(player.getX() + 2, player.getY(), player.getZ());
+        golem.setPlayerCreated(true);
+        if (mega) {
+            golem.getAttribute(net.minecraft.world.entity.ai.attributes.Attributes.MAX_HEALTH).setBaseValue(200);
+            golem.setHealth(200);
+            golem.getAttribute(net.minecraft.world.entity.ai.attributes.Attributes.ATTACK_DAMAGE).setBaseValue(30);
+        }
+        level.addFreshEntity(golem);
+    }
+
+    // Shared shop registry (mirrors ShopScreen items, server-side)
+    public static class ShopEntry {
+        public final ItemStack stack;
+        public final String name;
+        public final int price;
+        public final String specialId;
+
+        public ShopEntry(ItemStack s, String n, int p) { this(s, n, p, null); }
+        public ShopEntry(ItemStack s, String n, int p, String sid) {
+            stack = s; name = n; price = p; specialId = sid;
+        }
+    }
+
+    public static class ShopRegistry {
+        private static final java.util.List<ShopEntry> ENTRIES = new java.util.ArrayList<>();
+
+        static {
+            ENTRIES.add(new ShopEntry(new ItemStack(Items.WOODEN_SWORD),   "Дерев. меч",    10));
+            ENTRIES.add(new ShopEntry(new ItemStack(Items.STONE_SWORD),    "Камен. меч",    30));
+            ENTRIES.add(new ShopEntry(new ItemStack(Items.IRON_SWORD),     "Желез. меч",    80));
+            ENTRIES.add(new ShopEntry(new ItemStack(Items.DIAMOND_SWORD),  "Алмазный меч",  200));
+            ENTRIES.add(new ShopEntry(new ItemStack(Items.NETHERITE_SWORD),"Незер. меч",    500));
+            ENTRIES.add(new ShopEntry(new ItemStack(Items.BOW),            "Лук",           50));
+            ENTRIES.add(new ShopEntry(new ItemStack(Items.CROSSBOW),       "Арбалет",       90));
+            ENTRIES.add(new ShopEntry(new ItemStack(Items.ARROW, 32),      "32 стрелы",     20));
+            ENTRIES.add(new ShopEntry(new ItemStack(Items.SPECTRAL_ARROW, 16), "Спект. стрелы", 40));
+            ENTRIES.add(new ShopEntry(new ItemStack(Items.LEATHER_CHESTPLATE), "Кожа нагруд.", 40));
+            ENTRIES.add(new ShopEntry(new ItemStack(Items.IRON_CHESTPLATE),    "Жел. нагруд.", 120));
+            ENTRIES.add(new ShopEntry(new ItemStack(Items.DIAMOND_CHESTPLATE), "Алм. нагруд.", 350));
+            ENTRIES.add(new ShopEntry(new ItemStack(Items.IRON_HELMET),        "Жел. шлем",   80));
+            ENTRIES.add(new ShopEntry(new ItemStack(Items.DIAMOND_HELMET),     "Алм. шлем",   220));
+            ENTRIES.add(new ShopEntry(new ItemStack(Items.IRON_LEGGINGS),      "Жел. штаны",  100));
+            ENTRIES.add(new ShopEntry(new ItemStack(Items.DIAMOND_LEGGINGS),   "Алм. штаны",  280));
+            ENTRIES.add(new ShopEntry(new ItemStack(Items.IRON_BOOTS),         "Жел. ботинки",60));
+            ENTRIES.add(new ShopEntry(new ItemStack(Items.DIAMOND_BOOTS),      "Алм. ботинки",180));
+            ENTRIES.add(new ShopEntry(new ItemStack(Items.BREAD, 8),       "Хлеб x8",       15));
+            ENTRIES.add(new ShopEntry(new ItemStack(Items.COOKED_BEEF, 8), "Стейк x8",      35));
+            ENTRIES.add(new ShopEntry(new ItemStack(Items.GOLDEN_APPLE),   "Золотое яблоко",120));
+            ENTRIES.add(new ShopEntry(new ItemStack(Items.ENCHANTED_GOLDEN_APPLE), "Нотч яблоко", 800));
+            ENTRIES.add(new ShopEntry(new ItemStack(Items.POTION), "Зелье силы",    60, "strength"));
+            ENTRIES.add(new ShopEntry(new ItemStack(Items.POTION), "Зелье скорости",50, "speed"));
+            ENTRIES.add(new ShopEntry(new ItemStack(Items.POTION), "Зелье здоровья",45, "healing"));
+            ENTRIES.add(new ShopEntry(new ItemStack(Items.POTION), "Зелье защиты",  70, "resistance"));
+            ENTRIES.add(new ShopEntry(new ItemStack(Items.TOTEM_OF_UNDYING), "Тотем бессмертия", 1000));
+            ENTRIES.add(new ShopEntry(new ItemStack(Items.SHIELD),           "Щит",              80));
+            ENTRIES.add(new ShopEntry(new ItemStack(Items.OBSIDIAN, 16),     "Обсидиан x16",     60));
+            ENTRIES.add(new ShopEntry(new ItemStack(Items.TNT, 4),           "ТНТ x4",           100));
+            ENTRIES.add(new ShopEntry(new ItemStack(Items.ENDER_PEARL, 4),   "Эндер-жемчуг x4", 80));
+            ENTRIES.add(new ShopEntry(new ItemStack(Items.CARVED_PUMPKIN), "Голем (призыв)", 150, "golem"));
+            ENTRIES.add(new ShopEntry(new ItemStack(Items.IRON_BLOCK),     "Мега-голем",      500, "mega_golem"));
+        }
+
+        public static ShopEntry getEntry(int index) {
+            if (index < 0 || index >= ENTRIES.size()) return null;
+            return ENTRIES.get(index);
+        }
+    }
+}

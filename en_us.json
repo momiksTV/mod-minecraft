@@ -1,0 +1,25 @@
+package com.wavesurvival.mod.network.packets;
+
+import com.wavesurvival.mod.gui.ClientWaveData;
+import net.minecraft.network.FriendlyByteBuf;
+import net.minecraftforge.api.distmarker.Dist;
+import net.minecraftforge.fml.DistExecutor;
+import net.minecraftforge.network.NetworkEvent;
+
+import java.util.function.Supplier;
+
+public class SyncCoinPacket {
+    private final int coins;
+
+    public SyncCoinPacket(int coins) { this.coins = coins; }
+
+    public static void encode(SyncCoinPacket pkt, FriendlyByteBuf buf) { buf.writeInt(pkt.coins); }
+    public static SyncCoinPacket decode(FriendlyByteBuf buf) { return new SyncCoinPacket(buf.readInt()); }
+
+    public static void handle(SyncCoinPacket pkt, Supplier<NetworkEvent.Context> ctx) {
+        ctx.get().enqueueWork(() ->
+                DistExecutor.unsafeRunWhenOn(Dist.CLIENT, () -> () -> ClientWaveData.setCoins(pkt.coins))
+        );
+        ctx.get().setPacketHandled(true);
+    }
+}
